@@ -39,14 +39,21 @@ export class LiveSession {
 
   async connect(): Promise<void> {
     if (this.session) return;
-    if (!GEMINI_API_KEY) {
-      const err = new Error('Missing Gemini API key. Set VITE_GEMINI_API_KEY in a .env.local file.');
+
+    let apiKey = GEMINI_API_KEY;
+    try {
+      const stored = localStorage.getItem('GEMINI_API_KEY');
+      if (stored) apiKey = stored;
+    } catch {}
+
+    if (!apiKey) {
+      const err = new Error('No API key found. Please enter your Gemini API key.');
       this.cb.onError?.(err);
       throw err;
     }
 
     this.setState('connecting');
-    this.client = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    this.client = new GoogleGenAI({ apiKey });
 
     try {
       this.session = await this.client.live.connect({
@@ -58,11 +65,11 @@ export class LiveSession {
           tools: [{
             functionDeclarations: [{
               name: 'openWebsite',
-              description: 'Open a website in the user browser. Use when the user asks to open, visit, launch, or go to a site.',
+              description: 'Open a website in the user browser.',
               parameters: {
                 type: Type.OBJECT,
                 properties: {
-                  url: { type: Type.STRING, description: 'The full URL to open, e.g. "https://youtube.com".' },
+                  url: { type: Type.STRING, description: 'The full URL to open.' },
                 },
                 required: ['url'],
               },
@@ -70,18 +77,19 @@ export class LiveSession {
           }],
         },
         callbacks: {
-          onopen: () => {},
+          onopen: () => console.log('[LiveSession] connected'),
           onmessage: (msg: LiveServerMessage) => {
             if (!this.disposed) this.handleMessage(msg);
           },
           onerror: (e: ErrorEvent) => {
+            console.error('[LiveSession] error:', e);
             if (!this.disposed) {
-              console.error('[LiveSession] websocket error', e);
-              this.cb.onError?.(new Error(e.message || 'Live API error'));
+              this.cb.onError?.(new Error(e.message || 'Connection failed'));
               this.setState('error');
             }
           },
-          onclose: () => {
+          onclose: (e: CloseEvent) => {
+            console.log('[LiveSession] closed:', e?.reason);
             if (!this.disposed) {
               this.modelSpeaking = false;
               this.setState('disconnected');
@@ -93,9 +101,21 @@ export class LiveSession {
       await this.audio.startMic((chunk) => this.sendAudioChunk(chunk));
       this.setState('listening');
     } catch (err) {
+      console.error('[LiveSession] connect failed:', err);
+      const error = err as Error;
+      let msg = error.message || 'Connection failed';
+      if (msg.includes('404') || msg.includes('not found') || msg.includes('model')) {
+        msg = 'Model not available in your region. Try using a VPN set to US.';
+      } else if (msg.includes('403') || msg.includes('forbidden')) {
+        msg = 'API key not authorized. Check aistudio.google.com/apikey';
+      } else if (msg.includes('401') || msg.includes('API key')) {
+        msg = 'Invalid API key. Get one from aistudio.google.com/apikey';
+      } else if (msg.includes('network') || msg.includes('fetch')) {
+        msg = 'Network error. Check internet connection.';
+      }
+      this.cb.onError?.(new Error(msg));
       this.setState('error');
-      this.cb.onError?.(err as Error);
-      throw err;
+      throw new Error(msg);
     }
   }
 
@@ -104,7 +124,7 @@ export class LiveSession {
     this.audio.stopMic();
     this.audio.interruptPlayback();
     if (this.session) {
-      try { this.session.close(); } catch { /* ignore */ }
+      try { this.session.close(); } catch {}
       this.session = null;
     }
     this.modelSpeaking = false;
@@ -133,7 +153,6 @@ export class LiveSession {
         this.handleToolCall(fc);
       }
     }
-
     const audioParts = msg.serverContent?.modelTurn?.parts?.filter((p) => p.inlineData?.data);
     if (audioParts && audioParts.length > 0) {
       for (const part of audioParts) {
@@ -146,13 +165,11 @@ export class LiveSession {
         this.setState('speaking');
       }
     }
-
     if (msg.serverContent?.turnComplete) {
       this.modelSpeaking = false;
       this.setState('listening');
       this.cb.onTurnEnd?.();
     }
-
     if (msg.serverContent?.interrupted) {
       this.audio.interruptPlayback();
       this.modelSpeaking = false;
@@ -168,10 +185,8 @@ export class LiveSession {
     const id = fc.id ?? crypto.randomUUID();
     const name = fc.name as ToolCall['name'];
     if (!name) return;
-
     const call: ToolCall = { id, name, args: fc.arguments ?? {} };
     this.cb.onToolCall?.(call);
-
     let result = 'OK';
     if (name === 'openWebsite') {
       const raw = String(call.args.url ?? '').trim();
@@ -185,7 +200,6 @@ export class LiveSession {
     } else {
       result = `Unknown tool: ${name}`;
     }
-
     this.cb.onToolResponse?.(id, result);
     this.sendToolResponse(id, result);
   }
