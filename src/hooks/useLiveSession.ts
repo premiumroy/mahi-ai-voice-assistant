@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { AudioStreamer } from '../lib/AudioStreamer';
 import { LiveSession } from '../lib/LiveSession';
+import { GEMINI_API_KEY } from '../lib/config';
 import type { SessionState, Toast } from '../types';
 
 export interface UseLiveSessionResult {
@@ -15,6 +16,8 @@ export interface UseLiveSessionResult {
   outputLevel: number;
   toasts: Toast[];
   errorMessage: string | null;
+  needsApiKey: boolean;
+  saveApiKey: (key: string) => void;
   toggle: () => Promise<void>;
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
@@ -26,6 +29,13 @@ export function useLiveSession(): UseLiveSessionResult {
   const [outputLevel, setOutputLevel] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [errorMessage, setError] = useState<string | null>(null);
+  const [hasKey, setHasKey] = useState(() => {
+    try {
+      return !!localStorage.getItem('GEMINI_API_KEY') || !!GEMINI_API_KEY;
+    } catch {
+      return !!GEMINI_API_KEY;
+    }
+  });
 
   const audioRef = useRef<AudioStreamer | null>(null);
   const sessionRef = useRef<LiveSession | null>(null);
@@ -38,6 +48,16 @@ export function useLiveSession(): UseLiveSessionResult {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);
   }, []);
+
+  const saveApiKey = useCallback((key: string) => {
+    try {
+      localStorage.setItem('GEMINI_API_KEY', key.trim());
+      setHasKey(true);
+      pushToast('Key saved! Tap the mic to start ✨', 'info');
+    } catch {
+      setError('Could not save key');
+    }
+  }, [pushToast]);
 
   const connect = useCallback(async () => {
     if (connectingRef.current || sessionRef.current) return;
@@ -115,6 +135,8 @@ export function useLiveSession(): UseLiveSessionResult {
     outputLevel,
     toasts,
     errorMessage,
+    needsApiKey: !hasKey,
+    saveApiKey,
     toggle,
     connect,
     disconnect,
