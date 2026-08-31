@@ -13,8 +13,4 @@ function getApiKey(): string {
 
 export const GEMINI_API_KEY = getApiKey();
 
-/**
- * gemini-3.1-flash-live-preview may not be available in all regions.
- * Using gemini-2.5-flash-native-audio-preview which has broader availability.
- */
 export const GEMINI_MODEL = "gemini-2.5-flash-native-audio-preview";
